@@ -1,22 +1,30 @@
 package newsfeed
 
 import (
-	"fmt"
-	"newsfeed/comment"
-	"newsfeed/post"
-	"newsfeed/user"
+	"newsfeed/comment/storage/commentstore"
+	"newsfeed/post/storage/poststore"
+	"newsfeed/user/storage/userstore"
 	"sort"
-	"sync"
+
+	"newsfeed/comment"
+	commentstorage "newsfeed/comment/storage"
+	"newsfeed/post"
+	poststorage "newsfeed/post/storage"
+	"newsfeed/user"
+	userstorage "newsfeed/user/storage"
 )
 
 type NewsFeed struct {
-	users    sync.Map
-	posts    sync.Map
-	comments sync.Map
+	users    userstorage.UserStore
+	posts    poststorage.PostStore
+	comments commentstorage.CommentStore
 }
 
 func NewNewsFeed() NewsFeed {
-	return NewsFeed{}
+	commentstorage.InitCommentStore(commentstore.NewCommentStore())
+	poststorage.InitPostStore(poststore.NewPostStore())
+	userstorage.InitUserStore(userstore.NewUserStore())
+	return NewsFeed{userstorage.GetUserStore(), poststorage.GetPostStore(), commentstorage.GetCommentStore()}
 }
 
 func (nf *NewsFeed) SignUp(name string) (uint64, error) {
@@ -24,39 +32,29 @@ func (nf *NewsFeed) SignUp(name string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	nf.users.Store(u.GetId(), u)
-	return u.GetId(), nil
+	err = nf.users.AddUser(u)
+	return u.GetId(), err
 }
 
 func (nf *NewsFeed) Login(id uint64) (*user.User, error) {
-	value, ok := nf.users.Load(id)
-	if !ok {
-		return nil, fmt.Errorf("user %d does not exists", id)
-	}
-	u, _ := value.(*user.User)
-	return u, nil
-}
-
-func (nf NewsFeed) getUser(uid uint64) *user.User {
-	value, _ := nf.users.Load(uid)
-	u, _ := value.(*user.User)
-	return u
-}
-
-func (nf NewsFeed) getPost(uid uint64) *post.Post {
-	value, _ := nf.posts.Load(uid)
-	p, _ := value.(*post.Post)
-	return p
+	return nf.users.GetUser(id)
 }
 
 func (nf *NewsFeed) ShowNewsFeed(u *user.User) ([]*post.Post, error) {
 	fIds := u.GetFollowee()
 	posts := make([]*post.Post, 0)
 	for _, uid := range fIds {
-		u := nf.getUser(uid)
+		u, err := nf.users.GetUser(uid)
+		if err != nil {
+			return posts, err
+		}
 		postIds := u.GetPosts()
 		for _, pid := range postIds {
-			posts = append(posts, nf.getPost(pid))
+			post, err := nf.posts.GetPost(pid)
+			if err != nil {
+				return posts, err
+			}
+			posts = append(posts, post)
 		}
 	}
 	sort.Slice(posts, func(i, j int) bool {
@@ -73,7 +71,11 @@ func (nf *NewsFeed) ShowNewsFeed(u *user.User) ([]*post.Post, error) {
 	userPosts := u.GetPosts()
 	uposts := make([]*post.Post, 0)
 	for _, pid := range userPosts {
-		uposts = append(uposts, nf.getPost(pid))
+		post, err := nf.posts.GetPost(pid)
+		if err != nil {
+			return uposts, err
+		}
+		uposts = append(uposts, post)
 	}
 	sort.Slice(uposts, func(i, j int) bool {
 		voteCntI := uposts[i].GetVotes()
@@ -89,13 +91,12 @@ func (nf *NewsFeed) ShowNewsFeed(u *user.User) ([]*post.Post, error) {
 	return append(posts, uposts...), nil
 }
 
-
 func (nf *NewsFeed) Post(u *user.User, text string) (*post.Post, error) {
 	p, err := post.CreatePost(u.GetId(), text)
 	if err != nil {
 		return nil, err
 	}
-	nf.posts.Store(p.GetId(), p)
+	nf.posts.AddPost(p)
 	u.StorePostId(p.GetId())
 	return p, nil
 }
@@ -106,6 +107,6 @@ func (nf *NewsFeed) Comment(u *user.User, post *post.Post, text string) (*commen
 		return c, err
 	}
 	post.StoreComment(c.GetId())
-	nf.comments.Store(c.GetId(), c)
+	nf.comments.AddComment(c)
 	return c, nil
 }
